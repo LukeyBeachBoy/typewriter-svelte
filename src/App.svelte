@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {Delta, Editor, EditorChangeEvent, EditorRange, Source, TextChange,} from "typewriter-editor";
+    import {Delta, Editor, EditorChangeEvent, EditorRange, TextChange,} from "typewriter-editor";
     import {onMount, SvelteComponentTyped} from "svelte";
     import {fromEvent, Observable} from "rxjs";
     import {filter, skip, take, takeWhile} from "rxjs/operators";
@@ -42,7 +42,7 @@
             editor.modules.history.redo();
         }
 
-        editor.select(0);
+        setTimeout(() => editor.select(0));
     }
 
     function enableEditor() {
@@ -180,12 +180,19 @@
 
         const sourceBlock = editor.doc.byId[sourceKey];
         const newLocation = editor.doc.getLineRange(targetKey)?.[0];
-        const oldLocation = editor.doc.getLineRange(sourceBlock);
+        const oldLocation = editor.doc.getLineRange(sourceBlock)?.[0];
 
         if (newLocation == null) return;
 
-        const delta = new Delta().retain(oldLocation[0]).delete(sourceBlock.length).compose(new Delta().retain(newLocation - sourceBlock.length).concat(sourceBlock.content).insert('\n', sourceBlock.attributes));
-        editor.update(delta);
+        if (newLocation < oldLocation) {
+            // Insert first THEN delete
+            const delta = new Delta().retain(newLocation).concat(sourceBlock.content).insert('\n', sourceBlock.attributes).compose(new Delta().retain(oldLocation + sourceBlock.length).delete(sourceBlock.length));
+            editor.update(delta);
+        } else {
+            // Delete first THEN insert
+            const delta = new Delta().retain(oldLocation).delete(sourceBlock.length).compose(new Delta().retain(newLocation - sourceBlock.length).concat(sourceBlock.content).insert('\n', sourceBlock.attributes));
+            editor.update(delta);
+        }
     }
 </script>
 
@@ -241,7 +248,6 @@
             ________________________________________________________________________________________________________________
             ___________________________________________________________________________________________________________________
             ___________________________________________________________________________________________________________________</p>
-        <br>
         <h2>Heading 2</h2>
         <p>
             ****************************************************************************************************************
