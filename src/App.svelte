@@ -1,7 +1,7 @@
 <script lang="ts">
     import {Delta, Editor, EditorChangeEvent, EditorRange, TextChange,} from "typewriter-editor";
     import {onMount, SvelteComponentTyped} from "svelte";
-    import {fromEvent, Observable} from "rxjs";
+    import {fromEvent, merge, Observable, race, Subject} from "rxjs";
     import {filter, skip, take, takeWhile} from "rxjs/operators";
     import {UndoStack} from "typewriter-editor/lib/modules/history";
     import DragHandle from './DragHandle.svelte';
@@ -12,6 +12,7 @@
     let editor: Editor;
     let localEditor: Editor;
     const dragHandle: SvelteComponentTyped = new DragHandle({target: document.body, props: {element: null}});
+    const destroyLocalEditor = new Subject();
 
     onMount(() => {
         editor = window['editor'] = new Editor({
@@ -69,7 +70,7 @@
                 event.stopPropagation();
 
                 const line = editor.doc.getLineAt(editor.doc.selection[0]);
-                document.documentElement.click();
+                destroyLocalEditor.next();
 
                 await new Promise(requestAnimationFrame);
                 const endOfLine = editor.doc.getLineRange(line.attributes.id)[1];
@@ -80,8 +81,37 @@
                     handleClick();
                 })
             }
+            if (event.key === 'Escape') {
+                destroyLocalEditor.next();
+            }
+            if (event.key === 'ArrowDown' && event.altKey) {
+                // Navigate to next block
+                event.preventDefault();
+                event.stopPropagation()
+
+                const currentBlock = editor.doc.getLineAt(editor.doc.selection[1]);
+                const nextBlock = editor.doc.lines[editor.doc.lines.indexOf(currentBlock) + 1];
+                destroyLocalEditor.next();
+
+                await new Promise(requestAnimationFrame);
+                editor.select(editor.doc.getLineRange(nextBlock));
+                onSelectionChange();
+            }
+            if (event.key === 'ArrowUp' && event.altKey) {
+                // Navigate to previous block
+                event.preventDefault();
+                event.stopPropagation()
+
+                const currentBlock = editor.doc.getLineAt(editor.doc.selection[1]);
+                const previousBlock = editor.doc.lines[editor.doc.lines.indexOf(currentBlock) - 1];
+                destroyLocalEditor.next();
+
+                await new Promise(requestAnimationFrame);
+                editor.select(editor.doc.getLineRange(previousBlock));
+                onSelectionChange();
+            }
         } else {
-            if (isUndoShortcut(event) || isRedoShortcut(event)) {
+            if (!event.ctrlKey && !event.metaKey) {
                 event.stopPropagation();
                 event.preventDefault()
             }
@@ -95,7 +125,9 @@
             }
 
             await new Promise(requestAnimationFrame);
-            editor.select(0);
+            if (editor.doc.selection) {
+                editor.select(0);
+            }
         }
     }
 
@@ -162,11 +194,14 @@
             changes.push(change)
         });
 
-        fromEvent(document, 'click').pipe(
-            skip(1),
-            filter(click => !click.composedPath().includes(localEditorContainer)),
-            take(1)
-        ).subscribe(_ => {
+        merge(
+            destroyLocalEditor,
+            fromEvent(document, 'click')
+                .pipe(
+                    skip(1),
+                    filter(click => !click.composedPath().includes(localEditorContainer))
+                )
+        ).pipe(take(1)).subscribe(_ => {
             changeSubscription.unsubscribe();
             const history = localEditor.modules.history.getStack();
             localEditor.destroy();
