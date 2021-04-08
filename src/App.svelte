@@ -1,16 +1,23 @@
 <script lang="ts">
-    import {Delta, Editor, EditorChangeEvent, EditorRange} from "typewriter-editor";
-    import {onMount} from "svelte";
+    import {Delta, Editor, EditorChangeEvent, EditorRange, TextChange,} from "typewriter-editor";
+    import {onMount, SvelteComponentTyped} from "svelte";
     import {fromEvent, Observable} from "rxjs";
-    import {filter, take} from "rxjs/operators";
+    import {filter, skip, take, takeWhile} from "rxjs/operators";
     import {UndoStack} from "typewriter-editor/lib/modules/history";
+    import DragHandle from './DragHandle.svelte';
 
     let container: HTMLDivElement;
     let cachedHistory: UndoStack;
     let editor: Editor;
-    const defocus = fromEvent(document, 'click');
-    window['Delta'] = Delta;
+    let localEditor: Editor;
+    const dragHandle: SvelteComponentTyped = new DragHandle({target: document.body, props: {element: null}});
 
+    onMount(() => {
+        editor = window['editor'] = new Editor({
+            root: container,
+            html: container.innerHTML,
+        });
+    });
 
     function isRedoShortcut(event) {
         return (event.ctrlKey || event.metaKey) && event.key == 'y';
@@ -21,86 +28,100 @@
     }
 
     async function handleShortcuts(event: KeyboardEvent) {
-        console.log('here')
-        event.stopPropagation()
-        if (!editor.enabled) return;
+        if (localEditor) return;
+        if (isUndoShortcut(event) || isRedoShortcut(event)) {
+            event.stopPropagation();
+            event.preventDefault()
+        }
 
         if (isUndoShortcut(event) && editor.modules.history.hasUndo()) {
-            console.log('undo')
             editor.modules.history.undo();
         }
 
         if (isRedoShortcut(event) && editor.modules.history.hasRedo()) {
-            console.log('redo')
             editor.modules.history.redo();
         }
 
         await new Promise(requestAnimationFrame);
-        editor.select(null);
+        editor.select(0);
     }
 
     function enableEditor() {
-        container.setAttribute('contentEditable', 'true');
         editor.setRoot(container);
+        if (cachedHistory) {
+            editor.modules.history.setStack(cachedHistory);
+        }
         editor.enabled = true;
+        container.setAttribute('contentEditable', 'false');
     }
 
     function disableEditor() {
-        container.setAttribute('contentEditable', 'false');
-        const hiddenContainer = document.createElement('div');
-        editor.setRoot(hiddenContainer);
+        saveHistory();
         editor.enabled = false;
+        const temp = document.createElement('div');
+        editor.setRoot(temp);
     }
 
-    function injectLocalEditor(lineRange: EditorRange, cursorPos: number, selection: Selection): { localContainer: HTMLDivElement, localEditor: Editor, localChanges: Observable<EditorChangeEvent> } {
+    function injectLocalEditor(lineRange: EditorRange, cursorPos: number, element: HTMLElement): { localEditorContainer: HTMLDivElement, localChanges: Observable<EditorChangeEvent> } {
+        const localEditorContainer = document.createElement('div');
+        element.insertAdjacentElement('beforebegin', localEditorContainer);
+        element.replaceWith(localEditorContainer)
+
+        localEditor = new Editor({root: localEditorContainer, html: element.outerHTML});
+        localEditor.select(cursorPos)
+        const localChanges: Observable<EditorChangeEvent> = fromEvent(localEditor, 'change');
+
+        return {localEditorContainer, localChanges};
+    }
+
+    function handleClick() {
+        if (localEditor) return;
+        onSelectionChange();
+    }
+
+    function onSelectionChange() {
+        const selection = document.getSelection();
         const element = selection.anchorNode.parentElement;
+        const lineId = element['key'];
+        const lineRange = editor.doc.getLineRange(lineId);
+        const changes = [];
 
-        const localContainer = document.createElement('div');
-        element.insertAdjacentElement('beforebegin', localContainer);
-        element.replaceWith(localContainer)
+        if (!lineRange) return;
 
-        const localEditor: Editor = new Editor({root: localContainer, html: element.outerHTML});
-        localEditor.select(cursorPos - lineRange[0]);
-        const localChanges = fromEvent(localEditor, 'change');
+        enableEditor();
 
-        return {localContainer, localEditor, localChanges};
-    }
+        const {
+            localEditorContainer,
+            localChanges
+        } = injectLocalEditor(lineRange, selection.focusOffset, element);
 
-    function onSelectionChange(event: EditorChangeEvent) {
-        if (event.change?.delta.ops.length === 0) {
-            // Selection change
-            event.preventDefault();
-            event.stopPropagation();
-
-            const selection = document.getSelection();
-            const cursorPos = event.change.selection?.[0];
-            const lineRange = event.doc.getLineRange(cursorPos);
-            const id = editor.doc.getLineAt(cursorPos)?.attributes.id;
-
-            if (!cursorPos) return;
-
-            saveHistory();
+        new Promise(requestAnimationFrame).then(() => {
             disableEditor();
+            localEditorContainer.focus()
+        })
 
-            const {localContainer, localEditor, localChanges} = injectLocalEditor(lineRange, cursorPos, selection);
-            const changeSubscription = localChanges.subscribe(changeEvent => {
-                let content: Delta = editor.doc.byId[id].content;
-                editor.doc.byId[id].content = content.compose(changeEvent.change.delta);
-            });
+        const changeSubscription = localChanges.subscribe(changeEvent => {
+            const change = changeEvent.change.delta;
+            if (change.ops.length == 0) return;
+            changes.push(change)
+        });
 
-            defocus.pipe(
-                filter(click => !click.composedPath().includes(localContainer)),
-                take(1)
-            ).subscribe(_ => {
-                changeSubscription.unsubscribe();
-                localEditor.destroy();
-                enableEditor();
-                editor.off('change', onSelectionChange);
-                mergeHistory(localEditor.modules.history.getStack());
-                editor.on('change', onSelectionChange);
-            });
-        }
-
+        fromEvent(document, 'click').pipe(
+            skip(1),
+            filter(click => !click.composedPath().includes(localEditorContainer)),
+            take(1)
+        ).subscribe(_ => {
+            changeSubscription.unsubscribe();
+            const history = localEditor.modules.history.getStack();
+            localEditor.destroy();
+            localEditor = null;
+            const composed = new Delta(changes.reduce((acc, curr) => {
+                return acc.compose(curr)
+            }, new Delta()));
+            enableEditor();
+            editor.update(new Delta().retain(lineRange?.[0]).concat(composed));
+            mergeHistory(history, lineRange);
+        });
     }
 
     function retrieveHistory() {
@@ -111,19 +132,17 @@
         cachedHistory = editor.modules.history.getStack();
     }
 
-    function mergeHistory(historyStack: UndoStack) {
+    function mergeHistory(historyStack: UndoStack, [changeStartIndex, _]) {
+        console.log(historyStack);
+        if (historyStack.undo.length === 0 && historyStack.redo.length === 0) return;
+
         const currentStack: UndoStack = retrieveHistory();
         const undo = historyStack.undo.map(it => {
-            let redo = it.redo;
-            let undo = it.undo;
-            redo.delta.ops = redo.delta.ops.map(op => {
-                op.retain ? op.retain += 10 : null;
-                return op
-            });
-            undo.delta.ops = undo.delta.ops.map(op => {
-                op.retain ? op.retain += 10 : null;
-                return op
-            });
+            let redo: TextChange = it.redo;
+            let undo: TextChange = it.undo;
+
+            Object.keys((undo.delta.ops[0])[0] !== 'retain' || undo.delta.ops[0].retain !== changeStartIndex) && changeStartIndex !== 0 ? undo.delta.ops.splice(0, 0, {retain: changeStartIndex}) : null;
+            Object.keys((redo.delta.ops[0])[0] !== 'retain' || redo.delta.ops[0].retain !== changeStartIndex) && changeStartIndex !== 0 ? redo.delta.ops.splice(0, 0, {retain: changeStartIndex}) : null;
 
             return {
                 redo,
@@ -131,56 +150,102 @@
             }
         });
 
-        const redo = historyStack.redo.map(it => {
-            let redo = it.redo;
-            let undo = it.undo;
-            redo.delta.ops = redo.delta.ops.map(op => {
-                op.retain ? op.retain += 10 : null;
-                return op
-            });
-            undo.delta.ops = undo.delta.ops.map(op => {
-                op.retain ? op.retain += 10 : null;
-                return op
-            });
-
-            return {
-                redo,
-                undo
-            }
-        })
-
+        currentStack.undo.pop();
         currentStack.undo = [...currentStack.undo, ...undo];
-        currentStack.redo = [...currentStack.redo, ...redo];
+        currentStack.redo = [];
         editor.modules.history.setStack(currentStack);
-
     }
 
-    onMount(() => {
-        editor = window['editor'] = new Editor({
-            root: container,
-            html: container.innerHTML,
+    function showDragHandle(event: MouseEvent) {
+        if (dragHandle.dragging === true) return;
+        const target = event.target as HTMLElement;
+
+        if (target.tagName === 'DIV') return;
+
+        dragHandle.$set({element: target});
+
+        const handleElement = dragHandle.$$.ctx[0];
+
+        fromEvent(document, 'mousemove')
+            .pipe(
+                filter(evt => ![target, handleElement, ...handleElement.children].includes(evt.target)),
+                takeWhile(() => dragHandle.dragging == false),
+                take(1)
+            ).subscribe(_ => {
+            dragHandle.$set({element: null})
         });
-        editor.on('change', onSelectionChange);
-    });
+    }
+
+    function reorderBlock(event) {
+        const {targetKey, sourceKey} = event.detail;
+
+        const sourceBlock = editor.doc.byId[sourceKey];
+        const newLocation = editor.doc.getLineRange(editor.doc.byId[targetKey])?.[0];
+        const oldLocation = editor.doc.getLineRange(sourceBlock);
+
+        if (!newLocation) return;
+
+        editor.change.insertContent(newLocation, sourceBlock.content).delete(oldLocation).apply();
+    }
 </script>
 
 <style lang="scss">
+  * {
+    word-break: break-word;
+  }
+
   :focus {
     outline: none;
   }
+
+  .container {
+    overflow: hidden;
+    padding: 1.5rem;
+  }
+
+  .container :global(:not(div)) {
+    position: relative;
+
+    &.drop-target {
+      &:after {
+        border: 1px solid #b8b8ff;
+        content: "";
+        display: flex;
+        position: absolute;
+        top: -8px;
+        width: 100%;
+      }
+    }
+
+    &:hover {
+      &:before {
+        content: "";
+        height: 18px;
+        left: -5.3px;
+        padding: 0 2rem;
+        position: absolute;
+        top: 7px;
+        width: 10px;
+      }
+    }
+  }
+
 </style>
 
-<svelte:body on:keydown={handleShortcuts}/>
-<div bind:this={container} on:beforeInput={null}>
-    <h1>Heading 1</h1>
-    <p>
-        ________________________________________________________________________________________________________________
-        ___________________________________________________________________________________________________________________
-        ___________________________________________________________________________________________________________________</p>
-    <br>
-    <h2>Heading 2</h2>
-    <p>
-        ****************************************************************************************************************
-        *******************************************************************************************************************
-        *******************************************************************************************************************</p>
-</div>
+<svelte:window on:block-dropped={reorderBlock} on:keydown|capture={handleShortcuts}/>
+<section class="container">
+    <div bind:this={container} class="content" on:beforeInput={null} on:click|preventDefault={handleClick}
+         on:mouseover|preventDefault={showDragHandle}>
+        <h1>Heading 1</h1>
+        <p>
+            ________________________________________________________________________________________________________________
+            ___________________________________________________________________________________________________________________
+            ___________________________________________________________________________________________________________________</p>
+        <br>
+        <h2>Heading 2</h2>
+        <p>
+            ****************************************************************************************************************
+            *******************************************************************************************************************
+            *******************************************************************************************************************</p>
+    </div>
+</section>
