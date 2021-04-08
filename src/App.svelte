@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {Delta, Editor, EditorChangeEvent, EditorRange, TextChange,} from "typewriter-editor";
+    import {Delta, Editor, EditorChangeEvent, EditorRange, Source, TextChange,} from "typewriter-editor";
     import {onMount, SvelteComponentTyped} from "svelte";
     import {fromEvent, Observable} from "rxjs";
     import {filter, skip, take, takeWhile} from "rxjs/operators";
@@ -42,7 +42,6 @@
             editor.modules.history.redo();
         }
 
-        await new Promise(requestAnimationFrame);
         editor.select(0);
     }
 
@@ -180,12 +179,13 @@
         const {targetKey, sourceKey} = event.detail;
 
         const sourceBlock = editor.doc.byId[sourceKey];
-        const newLocation = editor.doc.getLineRange(editor.doc.byId[targetKey])?.[0];
+        const newLocation = editor.doc.getLineRange(targetKey)?.[0];
         const oldLocation = editor.doc.getLineRange(sourceBlock);
 
-        if (!newLocation) return;
+        if (newLocation == null) return;
 
-        editor.change.insertContent(newLocation, sourceBlock.content).delete(oldLocation).apply();
+        const delta = new Delta().retain(oldLocation[0]).delete(sourceBlock.length).compose(new Delta().retain(newLocation - sourceBlock.length).concat(sourceBlock.content).insert('\n', sourceBlock.attributes));
+        editor.update(delta);
     }
 </script>
 
