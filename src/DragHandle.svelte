@@ -19,8 +19,9 @@
     });
 
     $: if (element) {
-        (element as HTMLElement)?.style.transform = `translate(${$coords.x}px, ${$coords.y}px)`;
-        handle?.style.transform = `translate(${($coords.x + (element.offsetLeft - 20))}px, ${$coords.y + (element.offsetTop)}px)`;
+        const {x, y} = ($coords as { x, y });
+        (element as HTMLElement)?.style.transform = `translate(${x}px, ${y}px)`;
+        handle?.style.transform = `translate(${(x + (element.offsetLeft - 20))}px, ${y + (element.offsetTop)}px)`;
     }
 
     async function handleDrag(mouseDownEvent: MouseEvent) {
@@ -58,9 +59,9 @@
             }
         }
 
-        coords.update($coords => ({
-            x: $coords.x + dx,
-            y: $coords.y + dy
+        coords.update(() => ({
+            x: ($coords as { x, y }).x + dx,
+            y: ($coords as { x, y }).y + dy
         }));
     }
 
