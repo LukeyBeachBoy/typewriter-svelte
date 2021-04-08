@@ -20,7 +20,7 @@
 
     $: if (element) {
         (element as HTMLElement)?.style.transform = `translate(${$coords.x}px, ${$coords.y}px)`;
-        handle?.style.transform = `translate(${($coords.x + (element.offsetLeft - 20))}px, ${$coords.y + (element.offsetTop + 5)}px)`;
+        handle?.style.transform = `translate(${($coords.x + (element.offsetLeft - 20))}px, ${$coords.y + (element.offsetTop)}px)`;
     }
 
     async function handleDrag(mouseDownEvent: MouseEvent) {
@@ -95,6 +95,6 @@
 
 <svelte:options accessors/>
 <span bind:this={handle} class="drag-handle" on:mousedown|preventDefault|stopPropagation={handleDrag} on:mouseover
-      style="cursor: grab; position:absolute; left: -10px; top: 0; visibility: {element ? 'visible' : 'hidden'}; padding-left: 10px">
+      style="cursor: grab; position:absolute; left: -17px; top: 0; visibility: {element ? 'visible' : 'hidden'}; padding-left: 10px">
         <img alt="" src="assets/drag-handle.svg">
     </span>

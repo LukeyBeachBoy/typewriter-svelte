@@ -6,6 +6,7 @@
     import {UndoStack} from "typewriter-editor/lib/modules/history";
     import DragHandle from './DragHandle.svelte';
 
+    window['Delta'] = Delta;
     let container: HTMLDivElement;
     let cachedHistory: UndoStack;
     let editor: Editor;
@@ -15,8 +16,42 @@
     onMount(() => {
         editor = window['editor'] = new Editor({
             root: container,
-            html: container.innerHTML,
         });
+
+        editor.setDelta(new Delta({
+            ops: [
+                {
+                    insert: "Heading 1"
+                },
+                {
+                    insert: "\n",
+                    attributes: {
+                        header: 1
+                    }
+                },
+                {
+                    insert: "Short text"
+                },
+                {
+                    insert: "\n",
+                },
+                {
+                    insert: "Heading 2",
+                },
+                {
+                    insert: "\n",
+                    attributes: {
+                        header: 2
+                    }
+                },
+                {
+                    insert: "Short text 2"
+                },
+                {
+                    insert: "\n"
+                }
+            ]
+        }))
     });
 
     function isRedoShortcut(event) {
@@ -28,21 +63,40 @@
     }
 
     async function handleShortcuts(event: KeyboardEvent) {
-        if (localEditor) return;
-        if (isUndoShortcut(event) || isRedoShortcut(event)) {
-            event.stopPropagation();
-            event.preventDefault()
-        }
+        if (localEditor) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.stopPropagation();
 
-        if (isUndoShortcut(event) && editor.modules.history.hasUndo()) {
-            editor.modules.history.undo();
-        }
+                const line = editor.doc.getLineAt(editor.doc.selection[0]);
+                document.documentElement.click();
 
-        if (isRedoShortcut(event) && editor.modules.history.hasRedo()) {
-            editor.modules.history.redo();
-        }
+                await new Promise(requestAnimationFrame);
+                const endOfLine = editor.doc.getLineRange(line.attributes.id)[1];
+                editor.update(new Delta().retain(endOfLine).insert('').insert('\n'));
 
-        setTimeout(() => editor.select(0));
+                setTimeout(() => {
+                    editor.select(endOfLine);
+                    handleClick();
+                })
+            }
+        } else {
+            if (isUndoShortcut(event) || isRedoShortcut(event)) {
+                event.stopPropagation();
+                event.preventDefault()
+            }
+
+            if (isUndoShortcut(event) && editor.modules.history.hasUndo()) {
+                editor.modules.history.undo();
+            }
+
+            if (isRedoShortcut(event) && editor.modules.history.hasRedo()) {
+                editor.modules.history.redo();
+            }
+
+            await new Promise(requestAnimationFrame);
+            editor.select(0);
+        }
     }
 
     function enableEditor() {
@@ -63,10 +117,12 @@
 
     function injectLocalEditor(lineRange: EditorRange, cursorPos: number, element: HTMLElement): { localEditorContainer: HTMLDivElement, localChanges: Observable<EditorChangeEvent> } {
         const localEditorContainer = document.createElement('div');
+        localEditorContainer.classList.add('inline-edit');
         element.insertAdjacentElement('beforebegin', localEditorContainer);
         element.replaceWith(localEditorContainer)
 
         localEditor = new Editor({root: localEditorContainer, html: element.outerHTML});
+        localEditorContainer.firstElementChild.classList.add('editing');
         localEditor.select(cursorPos)
         const localChanges: Observable<EditorChangeEvent> = fromEvent(localEditor, 'change');
 
@@ -80,7 +136,7 @@
 
     function onSelectionChange() {
         const selection = document.getSelection();
-        const element = selection.anchorNode.parentElement;
+        const element = selection.anchorNode.nodeName === '#text' ? selection.anchorNode.parentElement : selection.anchorNode as HTMLElement;
         const lineId = element['key'];
         const lineRange = editor.doc.getLineRange(lineId);
         const changes = [];
@@ -100,6 +156,7 @@
         })
 
         const changeSubscription = localChanges.subscribe(changeEvent => {
+            localEditorContainer.firstElementChild.classList.add('editing');
             const change = changeEvent.change.delta;
             if (change.ops.length == 0) return;
             changes.push(change)
@@ -132,7 +189,6 @@
     }
 
     function mergeHistory(historyStack: UndoStack, [changeStartIndex, _]) {
-        console.log(historyStack);
         if (historyStack.undo.length === 0 && historyStack.redo.length === 0) return;
 
         const currentStack: UndoStack = retrieveHistory();
@@ -210,12 +266,16 @@
     padding: 1.5rem;
   }
 
+  .container :global(div.inline-edit:focus) {
+    outline: #70708a auto;
+  }
+
   .container :global(:not(div)) {
     position: relative;
 
     &.drop-target {
       &:after {
-        border: 1px solid #b8b8ff;
+        border: 1px solid #70708a;
         content: "";
         display: flex;
         position: absolute;
@@ -224,11 +284,16 @@
       }
     }
 
-    &:hover {
+    &:not(.drop-target, .editing):hover {
+      box-shadow: -2px 0 0 4px #f5f5f5;
+      border-radius: 1px;
+      background: #f5f5f5;
+
+      // Create a 'bridge' from the element to the drag handle so it doesn't lose it's hover state
       &:before {
         content: "";
         height: 18px;
-        left: -5.3px;
+        left: -8.3px;
         padding: 0 2rem;
         position: absolute;
         top: 7px;
@@ -243,15 +308,5 @@
 <section class="container">
     <div bind:this={container} class="content" on:beforeInput={null} on:click|preventDefault={handleClick}
          on:mouseover|preventDefault={showDragHandle}>
-        <h1>Heading 1</h1>
-        <p>
-            ________________________________________________________________________________________________________________
-            ___________________________________________________________________________________________________________________
-            ___________________________________________________________________________________________________________________</p>
-        <h2>Heading 2</h2>
-        <p>
-            ****************************************************************************************************************
-            *******************************************************************************************************************
-            *******************************************************************************************************************</p>
     </div>
 </section>
