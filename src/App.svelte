@@ -1,16 +1,19 @@
 <script lang="ts">
-    import {Delta, Editor, EditorChangeEvent, EditorRange, TextChange,} from "typewriter-editor";
+    import {Delta, Editor, EditorChangeEvent, EditorRange, placeholder, TextChange,} from "typewriter-editor";
     import {onMount, SvelteComponentTyped} from "svelte";
-    import {fromEvent, merge, Observable, race, Subject} from "rxjs";
+    import {fade} from 'svelte/transition';
+    import {BehaviorSubject, fromEvent, merge, Observable, Subject} from "rxjs";
     import {filter, skip, take, takeWhile} from "rxjs/operators";
     import {UndoStack} from "typewriter-editor/lib/modules/history";
     import DragHandle from './DragHandle.svelte';
+    import InlineMenu from 'typewriter-editor/lib/InlineMenu.svelte';
 
     window['Delta'] = Delta;
     let container: HTMLDivElement;
     let cachedHistory: UndoStack;
     let editor: Editor;
-    let localEditor: Editor;
+    let inlineMenu;
+    let localEditor = new BehaviorSubject<Editor>(null);
     const dragHandle: SvelteComponentTyped = new DragHandle({target: document.body, props: {element: null}});
     const destroyLocalEditor = new Subject();
 
@@ -64,7 +67,7 @@
     }
 
     async function handleShortcuts(event: KeyboardEvent) {
-        if (localEditor) {
+        if ($localEditor) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 event.stopPropagation();
@@ -153,16 +156,22 @@
         element.insertAdjacentElement('beforebegin', localEditorContainer);
         element.replaceWith(localEditorContainer)
 
-        localEditor = new Editor({root: localEditorContainer, html: element.outerHTML});
+        const _localEditor = new Editor({root: localEditorContainer, html: element.outerHTML});
+        localEditor.next(_localEditor);
         localEditorContainer.firstElementChild.classList.add('editing');
-        localEditor.select(cursorPos)
-        const localChanges: Observable<EditorChangeEvent> = fromEvent(localEditor, 'change');
+        _localEditor.select(cursorPos);
+        const localChanges: Observable<EditorChangeEvent> = fromEvent(_localEditor, 'change');
 
         return {localEditorContainer, localChanges};
     }
 
-    function handleClick() {
-        if (localEditor) return;
+    function handleClick(event?: MouseEvent) {
+        const target: HTMLElement = (event?.target as HTMLElement);
+        if (target?.tagName === 'HR') {
+            return;
+        }
+
+        if ($localEditor) return;
         onSelectionChange();
     }
 
@@ -203,14 +212,16 @@
                 )
         ).pipe(take(1)).subscribe(_ => {
             changeSubscription.unsubscribe();
-            const history = localEditor.modules.history.getStack();
-            localEditor.destroy();
-            localEditor = null;
+            const _localEditor: Editor = $localEditor as Editor;
+            const history = _localEditor.modules.history.getStack();
+            _localEditor.destroy();
+            localEditor.next(null);
             const composed = new Delta(changes.reduce((acc, curr) => {
                 return acc.compose(curr)
             }, new Delta()));
             enableEditor();
             editor.update(new Delta().retain(lineRange?.[0]).concat(composed));
+            editor.select(0);
             mergeHistory(history, lineRange);
         });
     }
@@ -320,27 +331,120 @@
     }
 
     &:not(.drop-target, .editing):hover {
-      box-shadow: -2px 0 0 4px #f5f5f5;
-      border-radius: 1px;
-      background: #f5f5f5;
+      &:not(hr) {
+        box-shadow: -2px 0 0 4px #f5f5f5;
+        border-radius: 1px;
+        background: #f5f5f5;
+      }
 
       // Create a 'bridge' from the element to the drag handle so it doesn't lose it's hover state
       &:before {
         content: "";
-        height: 18px;
-        left: -8.3px;
-        padding: 0 2rem;
+        height: 24px;
+        left: -13.3px;
+        padding: 0 0 0 2rem;
         position: absolute;
-        top: 7px;
-        width: 10px;
+        top: 0px;
+        width: 0px;
       }
     }
   }
 
+  :global(hr) {
+    overflow: visible;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 14px 0;
+    border: none;
+    cursor: default;
+    height: 1px;
+    background-color: #ccc;
+    background-clip: content-box;
+
+    &.selected {
+      box-shadow: inset 0 0 0 16px #8abbff33;
+      outline: 1px solid #70708a;
+      outline-offset: -1px;
+    }
+  }
+
+  :global(.inline-menu) {
+    z-index: 999;
+  }
+
+  .menu {
+    display: flex;
+    height: 32px;
+    color: #999;
+    white-space: nowrap;
+  }
+
+  .menu-button {
+    text-align: center;
+    border: none;
+    margin: 0;
+    padding: 0;
+    width: 48px;
+    height: 32px;
+    line-height: 32px;
+    color: inherit;
+    font-size: 12px;
+    background: none;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .menu-button:hover {
+    color: #444;
+  }
+
+  .separator {
+    height: 16px;
+    margin: 8px 0;
+    border-right: 1px solid #aaa;
+  }
 </style>
 
 <svelte:window on:block-dropped={reorderBlock} on:keydown|capture={handleShortcuts}/>
 <section class="container">
+        <InlineMenu bind:this={inlineMenu} editor={$localEditor} let:active let:commands>
+            <div class="menu" in:fade={{ duration: 100 }}>
+                <button
+                        class="menu-button"
+                        class:active={active.header === 1}
+                        on:click={commands.header1}
+                >H1
+                </button>
+                <span class="separator"></span>
+                <button
+                        class="menu-button"
+                        class:active={active.header === 2}
+                        on:click={commands.header2}
+                >H2
+                </button>
+                <span class="separator"></span>
+                <button
+                        class="menu-button"
+                        class:active={active.header === 3}
+                        on:click={commands.header3}
+                >H3
+                </button>
+                <span class="separator"></span>
+                <button
+                        class="menu-button"
+                        class:active={active.header === 4}
+                        on:click={commands.header4}
+                >H4
+                </button>
+                <span class="separator"></span>
+                <button
+                        class="menu-button"
+                        class:active={active.hr}
+                        on:click={commands.hr}
+                >–
+                </button>
+            </div>
+        </InlineMenu>
     <div bind:this={container} class="content" on:beforeInput={null} on:click|preventDefault={handleClick}
          on:mouseover|preventDefault={showDragHandle}>
     </div>

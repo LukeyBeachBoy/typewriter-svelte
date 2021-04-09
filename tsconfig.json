@@ -1,5 +1,5 @@
 {
-	"include": ["src/**/*", "webpack.config.ts"],
+	"include": ["src/**/*", "webpack.config.ts, node_modules/typewriter-editor/lib/*.svelte"],
 	"exclude": ["node_modules/*", "__sapper__/*", "public/*"],
 	"compilerOptions": {
 		"moduleResolution": "node",
@@ -14,6 +14,7 @@
 			"src/*": ["src/*"]
 		},
 		"types": [
+			"node",
 			"svelte",
 			"svelte/store",
 			"svelte/motion",
